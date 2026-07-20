@@ -70,5 +70,59 @@
     "ball_3": 6,
     "total": 12,
     "verdict": "Lớn"
+  },
+  {
+    "date": "2026-07-20",
+    "draw_id": 177607,
+    "ball_1": 3,
+    "ball_2": 6,
+    "ball_3": 2,
+    "total": 11,
+    "verdict": "Hòa"
+  },
+  {
+    "date": "2026-07-20",
+    "draw_id": 177608,
+    "ball_1": 4,
+    "ball_2": 5,
+    "ball_3": 4,
+    "total": 13,
+    "verdict": "Lớn"
+  },
+  {
+    "date": "2026-07-20",
+    "draw_id": 177609,
+    "ball_1": 3,
+    "ball_2": 6,
+    "ball_3": 5,
+    "total": 14,
+    "verdict": "Lớn"
+  },
+  {
+    "date": "2026-07-20",
+    "draw_id": 177610,
+    "ball_1": 4,
+    "ball_2": 6,
+    "ball_3": 6,
+    "total": 16,
+    "verdict": "Lớn"
+  },
+  {
+    "date": "2026-07-20",
+    "draw_id": 177611,
+    "ball_1": 6,
+    "ball_2": 2,
+    "ball_3": 5,
+    "total": 13,
+    "verdict": "Lớn"
+  },
+  {
+    "date": "2026-07-20",
+    "draw_id": 177612,
+    "ball_1": 1,
+    "ball_2": 6,
+    "ball_3": 2,
+    "total": 9,
+    "verdict": "Nhỏ"
   }
 ]
