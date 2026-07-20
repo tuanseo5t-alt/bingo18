@@ -6,7 +6,7 @@ Kết quả xổ số điện toán BINGO18 mới nhất.
 
 | Kỳ QSMT | Ngày | Bóng 1 | Bóng 2 | Bóng 3 | Tổng | Lớn/Nhỏ |
 | :-----: | :--: | :----: | :----: | :----: | :--: | :-----: |
-| [#0177135](https://raw.githubusercontent.com/tuanseo5t-alt/bingo18/refs/heads/main/data/bingo18/bingo18.json) | 17/07/2026 | 3 | 3 | 6 | 12 | Lớn |
+| [#0177612](https://raw.githubusercontent.com/tuanseo5t-alt/bingo18/refs/heads/main/data/bingo18/bingo18.json) | 20/07/2026 | 1 | 6 | 2 | 9 | Nhỏ |
 
 ## Data (Dữ liệu)
 
