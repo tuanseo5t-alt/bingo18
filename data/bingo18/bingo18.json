@@ -2896,5 +2896,32 @@
     "ball_3": 3,
     "total": 14,
     "verdict": "Lớn"
+  },
+  {
+    "date": "2026-07-22",
+    "draw_id": 177921,
+    "ball_1": 5,
+    "ball_2": 3,
+    "ball_3": 4,
+    "total": 12,
+    "verdict": "Lớn"
+  },
+  {
+    "date": "2026-07-22",
+    "draw_id": 177922,
+    "ball_1": 1,
+    "ball_2": 2,
+    "ball_3": 5,
+    "total": 8,
+    "verdict": "Nhỏ"
+  },
+  {
+    "date": "2026-07-22",
+    "draw_id": 177923,
+    "ball_1": 1,
+    "ball_2": 5,
+    "ball_3": 6,
+    "total": 12,
+    "verdict": "Lớn"
   }
 ]

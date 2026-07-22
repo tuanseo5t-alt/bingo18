@@ -10,8 +10,12 @@ on:
 
 jobs:
   update-data:
+    # Free public proxies are slow (5-8s per request) and only ~12% pass
+    # Vietlott's IP reputation check, so a full probe + 5 retries can
+    # take 5-10 minutes. 10 minutes gives us headroom while still letting
+    # a fresh cron run start before the previous one finishes.
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -24,18 +28,19 @@ jobs:
 
       # Cloudflare hard-blocks the GitHub Actions IP range with HTTP 403.
       # The fetcher rotates through multiple Chrome impersonate profiles
-      # and an optional proxy pool to bypass this. Configure BINGO18_PROXIES
-      # as a repository secret holding a semicolon-separated list of
-      # `http://user:pass@host:port` URLs (or leave it empty to use the
-      # direct runner IP, which usually fails on Actions).
+      # and an optional proxy pool to bypass this. By default it scrapes
+      # public free-proxy listings and probes them against Vietlott;
+      # optionally override BINGO18_PROXIES as a repository secret
+      # containing a semicolon-separated list of
+      # `http://user:pass@host:port` URLs to use paid/known-good proxies.
       - name: Forward proxy secret
         env:
           BINGO18_PROXIES: ${{ secrets.BINGO18_PROXIES }}
         run: |
           if [ -n "$BINGO18_PROXIES" ]; then
-            echo "BINGO18_PROXIES length: $(printf '%s' "$BINGO18_PROXIES" | wc -c) chars"
+            echo "BINGO18_PROXIES configured: $(printf '%s' "$BINGO18_PROXIES" | tr ';' '\n' | wc -l) entry(s)"
           else
-            echo "BINGO18_PROXIES is empty; fetcher will try direct egress"
+            echo "BINGO18_PROXIES not set; fetcher will rely on FreeProxyPool"
           fi
 
       - name: Fetch latest draws
