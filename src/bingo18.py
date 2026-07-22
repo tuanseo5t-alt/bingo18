@@ -65,9 +65,11 @@ def _resolve_impersonate_profiles() -> tuple[str, ...]:
 
 IMPERSONATE_BROWSERS = _resolve_impersonate_profiles()
 # Cloudflare/Vietlott returns 403 on blocked IPs (very common from GitHub
-# Actions runners). When that happens we rotate to the next browser profile
-# and optionally to a new proxy before retrying.
-MAX_ATTEMPTS_PER_REQUEST = 5
+# Actions runners). When that happens we rotate to a new browser profile
+# and optionally to a new proxy before retrying. Without any proxy at
+# all we are limited to rotating browser profiles against the runner IP,
+# which is almost always blocked — so the fetcher logs a clear warning.
+MAX_ATTEMPTS_PER_REQUEST = 8
 RETRY_BACKOFF_BASE = 1.5  # seconds; multiplied per attempt
 # Public free-proxy list sources. Each URL must return HTML or text where
 # IP:PORT pairs can be parsed. Override via FREE_PROXY_SOURCES env var
@@ -254,6 +256,18 @@ class _Http:
         proxies_env = os.environ.get('BINGO18_PROXIES') or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
         self._static_proxies = _parse_proxies(proxies_env)
         self._free_pool = FreeProxyPool()
+        # Emit a one-line warning at start-up so operators immediately
+        # see when the fetcher is running "naked" on a likely-blocked IP
+        # (most commonly the GitHub Actions shared range).
+        if not self._static_proxies and not self._free_pool.proxies():
+            print(
+                'WARNING: no proxy configured. Direct egress from this IP is '
+                'very likely blocked by Cloudflare (HTTP 403). Set the '
+                'BINGO18_PROXIES environment variable / repository secret '
+                'to a semicolon-separated list of http://user:pass@host:port '
+                'entries to fix this.',
+                flush=True,
+            )
         self._default_headers = {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'vi,en;q=0.9',

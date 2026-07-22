@@ -4,9 +4,12 @@ on:
   workflow_dispatch:
   schedule:
     # Bingo18 draws every ~6 minutes between 06:00 and 21:53 (UTC+7).
-    # Polling at the minimum 5-minute cron cadence plus the fetcher's
-    # Ajax back-fill keeps every draw even when a run is delayed.
-    - cron: '*/5 * * * *'
+    # Cron runs every 20 minutes: short enough to never miss more than a
+    # handful of draws, long enough that consecutive runs do not overlap
+    # and cancel each other (each run takes 1-10 min depending on proxy
+    # health). The fetcher back-fills any draws that arrived since the
+    # last successful run via Ajax-side pagination.
+    - cron: '*/20 * * * *'
 
 jobs:
   update-data:
