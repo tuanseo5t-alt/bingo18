@@ -6,12 +6,10 @@ from datetime import date, datetime
 import json
 from pathlib import Path
 import re
-import time
 
 import pandas as pd
-import requests
 from bs4 import BeautifulSoup
-from cloudscraper import CloudScraper
+from curl_cffi import requests as curl_requests
 
 from dtos import Bingo18Result, Bingo18ResultList
 
@@ -22,73 +20,33 @@ DATA_DIR = Path('data/bingo18')
 PAGE_SIZE = 6
 MAX_PAGES_PER_FETCH = 100
 REQUEST_TIMEOUT = 30
-MAX_RETRIES = 4
-USER_AGENT = (
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-    'AppleWebKit/537.36 (KHTML, like Gecko) '
-    'Chrome/124.0.0.0 Safari/537.36'
-)
+IMPERSONATE_BROWSER = 'chrome124'
 
 
 class _Http:
-    """Plain ``requests.Session`` first, fall back to ``cloudscraper``.
+    """HTTP client with Chrome TLS fingerprint via curl_cffi.
 
-    Vietlott sits behind Cloudflare but does not always require a JS
-    challenge. Plain requests with a real browser User-Agent succeeds
-    on most runners; when Cloudflare blocks with HTTP 403/503 we
-    transparently retry through cloudscraper with exponential backoff.
+    Vietlott sits behind Cloudflare and blocks both plain ``requests``
+    and ``cloudscraper`` from GitHub Actions runners because the TLS
+    fingerprint of Python's HTTP stack is rejected. ``curl_cffi`` with
+    ``impersonate='chrome124'`` produces the same ClientHello as a real
+    Chrome and is accepted by Cloudflare.
     """
 
     def __init__(self) -> None:
-        self._session = requests.Session()
+        self._session = curl_requests.Session(impersonate=IMPERSONATE_BROWSER)
         self._session.headers.update({
-            'User-Agent': USER_AGENT,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'vi,en;q=0.9',
         })
-        self._scraper: CloudScraper | None = None
-        self._last_status: int | None = None
-
-    def _scraper_instance(self) -> CloudScraper:
-        if self._scraper is None:
-            self._scraper = CloudScraper()
-            self._scraper.headers.update({
-                'User-Agent': USER_AGENT,
-                'Accept-Language': 'vi,en;q=0.9',
-            })
-        return self._scraper
 
     def get(self, url: str, **kwargs):
-        return self._request('GET', url, **kwargs)
+        kwargs.setdefault('timeout', REQUEST_TIMEOUT)
+        return self._session.get(url, **kwargs)
 
     def post(self, url: str, data, **kwargs):
-        return self._request('POST', url, data=data, **kwargs)
-
-    def _request(self, method: str, url: str, **kwargs):
         kwargs.setdefault('timeout', REQUEST_TIMEOUT)
-        last_exc: Exception | None = None
-        for attempt in range(MAX_RETRIES):
-            response = self._session.request(method, url, **kwargs)
-            self._last_status = response.status_code
-            if response.status_code in (403, 503):
-                # Cloudflare challenged us; switch to cloudscraper with backoff.
-                scraper = self._scraper_instance()
-                response = scraper.request(method, url, data=kwargs.get('data'), **{
-                    k: v for k, v in kwargs.items() if k != 'data'
-                })
-                self._last_status = response.status_code
-                if response.status_code in (403, 503):
-                    sleep_seconds = 5 * (attempt + 1)
-                    time.sleep(sleep_seconds)
-                    last_exc = RuntimeError(
-                        f'Vietlott blocked request to {url} '
-                        f'(HTTP {response.status_code}); retry {attempt + 1}/{MAX_RETRIES}'
-                    )
-                    continue
-            return response
-        if last_exc is not None:
-            raise last_exc
-        return response
+        return self._session.post(url, data=data, **kwargs)
 
 
 class Bingo18:
