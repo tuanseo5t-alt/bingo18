@@ -20,7 +20,7 @@ jobs:
           python-version: '3.14'
 
       - name: Install dependencies
-        run: pip install --quiet cloudscraper beautifulsoup4 lxml pydantic pandas pyarrow curl_cffi
+        run: pip install --quiet --upgrade cloudscraper beautifulsoup4 lxml pydantic pandas pyarrow "curl_cffi>=0.15.0"
 
       - name: Fetch latest draws
         run: python src/fetch_bingo18.py --once
