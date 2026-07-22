@@ -3,11 +3,15 @@ name: Update Bingo18 data
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/7 * * * *'  # Every 7 minutes (Bingo18 draws every ~6 minutes)
+    # Bingo18 draws every ~6 minutes between 06:00 and 21:53 (UTC+7).
+    # Polling at the minimum 5-minute cron cadence plus the fetcher's
+    # Ajax back-fill keeps every draw even when a run is delayed.
+    - cron: '*/5 * * * *'
 
 jobs:
   update-data:
     runs-on: ubuntu-latest
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
 
