@@ -20,7 +20,7 @@ DATA_DIR = Path('data/bingo18')
 PAGE_SIZE = 6
 MAX_PAGES_PER_FETCH = 100
 REQUEST_TIMEOUT = 30
-IMPERSONATE_BROWSER = 'chrome124'
+IMPERSONATE_BROWSER = 'chrome131'
 
 
 class _Http:
@@ -29,12 +29,12 @@ class _Http:
     Vietlott sits behind Cloudflare and blocks both plain ``requests``
     and ``cloudscraper`` from GitHub Actions runners because the TLS
     fingerprint of Python's HTTP stack is rejected. ``curl_cffi`` with
-    ``impersonate='chrome124'`` produces the same ClientHello as a real
+    ``impersonate='chrome131'`` produces the same ClientHello as a real
     Chrome and is accepted by Cloudflare.
     """
 
     def __init__(self) -> None:
-        self._session = curl_requests.Session(impersonate=IMPERSONATE_BROWSER)
+        self._session = curl_requests.Session(impersonate='chrome131')
         self._session.headers.update({
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'vi,en;q=0.9',
