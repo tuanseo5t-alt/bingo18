@@ -3,9 +3,13 @@ __github__ = 'https://github.com/khiemdoan'
 __email__ = 'doankhiem.crazy@gmail.com'
 
 from datetime import date, datetime
+from itertools import cycle
 import json
+import os
 from pathlib import Path
+import random
 import re
+import time
 
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -20,33 +24,114 @@ DATA_DIR = Path('data/bingo18')
 PAGE_SIZE = 6
 MAX_PAGES_PER_FETCH = 100
 REQUEST_TIMEOUT = 30
-IMPERSONATE_BROWSER = 'chrome131'
+# Order matters: prefer the most recent Chrome profile, then fall back.
+IMPERSONATE_BROWSERS = ('chrome133', 'chrome131', 'chrome124', 'edge101', 'safari17_0')
+# Cloudflare/Vietlott returns 403 on blocked IPs (very common from GitHub
+# Actions runners). When that happens we rotate to the next browser profile
+# and optionally to a new proxy before retrying.
+MAX_ATTEMPTS_PER_REQUEST = 5
+RETRY_BACKOFF_BASE = 1.5  # seconds; multiplied per attempt
+
+
+def _parse_proxies(value: str | None) -> list[str]:
+    """Parse the proxy list from an env var.
+
+    Accepts either ``HTTP_PROXY``/``HTTPS_PROXY`` style single URLs or a
+    semicolon-separated list in ``BINGO18_PROXIES``. Empty/whitespace
+    entries are dropped. Used to mask GitHub Actions runner IPs from
+    Cloudflare's IP reputation scoring.
+    """
+    if not value:
+        return []
+    parts = [p.strip() for p in value.replace('\n', ';').split(';')]
+    return [p for p in parts if p]
 
 
 class _Http:
     """HTTP client with Chrome TLS fingerprint via curl_cffi.
 
-    Vietlott sits behind Cloudflare and blocks both plain ``requests``
-    and ``cloudscraper`` from GitHub Actions runners because the TLS
-    fingerprint of Python's HTTP stack is rejected. ``curl_cffi`` with
-    ``impersonate='chrome131'`` produces the same ClientHello as a real
-    Chrome and is accepted by Cloudflare.
+    Vietlott sits behind Cloudflare and rejects Python's default TLS
+    fingerprint, the ``cloudscraper`` ClientHello, and even ``curl_cffi``
+    impersonating ``chrome124``. To buy a few more weeks we:
+
+    1. Try a newer impersonate profile first (``chrome133``),
+       then fall back through older ones.
+    2. Optionally rotate through a configured proxy pool so each
+       connection looks like it comes from a different residential IP.
+    3. Back off and retry on 403/503 from Cloudflare.
     """
 
     def __init__(self) -> None:
-        self._session = curl_requests.Session(impersonate='chrome131')
-        self._session.headers.update({
+        # Read proxy pool once at construction. Each successful request
+        # remembers the proxy it used so the whole render-info / draw
+        # call shares the same egress IP (Cloudflare ties the Ajax call
+        # cookies to the page-fetch IP).
+        proxies_env = os.environ.get('BINGO18_PROXIES') or os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+        self._proxies = _parse_proxies(proxies_env)
+        self._default_headers = {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'vi,en;q=0.9',
-        })
+        }
+
+    def _build_session(self, impersonate: str, proxy: str | None) -> curl_requests.Session:
+        session = curl_requests.Session(impersonate=impersonate)
+        session.headers.update(self._default_headers)
+        if proxy:
+            session.proxies = {'http': proxy, 'https': proxy}
+        return session
+
+    def _attempt_order(self, exclude: tuple[str, ...] = ()) -> list[tuple[str, str | None]]:
+        """Yield ``(impersonate, proxy)`` pairs to try in order.
+
+        If no proxies are configured the proxy component is ``None``
+        for every pair. The first item is the preferred browser; if
+        it fails we rotate to the next browser (same proxy), and only
+        rotate the proxy when we are about to start a new session.
+        """
+        browsers = [b for b in IMPERSONATE_BROWSERS if b not in exclude]
+        if not self._proxies:
+            return [(b, None) for b in browsers]
+        proxy_cycle = cycle(self._proxies)
+        pairs = []
+        for b in browsers:
+            pairs.append((b, next(proxy_cycle)))
+        return pairs
+
+    def request(self, method: str, url: str, **kwargs):
+        """Issue a GET/POST with impersonate + proxy rotation and retry.
+
+        Retries on any ``curl_cffi`` transport/HTTP error. Each retry
+        rotates to a new browser profile; if multiple proxies are
+        configured the proxy rotates too.
+        """
+        kwargs.setdefault('timeout', REQUEST_TIMEOUT)
+        last_exc: Exception | None = None
+        attempts = self._attempt_order()
+        for idx, (impersonate, proxy) in enumerate(attempts[:MAX_ATTEMPTS_PER_REQUEST]):
+            session = self._build_session(impersonate, proxy)
+            try:
+                response = session.request(method, url, **kwargs)
+                response.raise_for_status()
+                return response
+            except Exception as exc:  # noqa: BLE001 - we want to catch any transport error
+                last_exc = exc
+                sleep_for = (RETRY_BACKOFF_BASE ** idx) + random.uniform(0, 0.5)
+                time.sleep(min(sleep_for, 8.0))
+            finally:
+                try:
+                    session.close()
+                except Exception:
+                    pass
+        assert last_exc is not None
+        raise last_exc
 
     def get(self, url: str, **kwargs):
-        kwargs.setdefault('timeout', REQUEST_TIMEOUT)
-        return self._session.get(url, **kwargs)
+        return self.request('GET', url, **kwargs)
 
-    def post(self, url: str, data, **kwargs):
-        kwargs.setdefault('timeout', REQUEST_TIMEOUT)
-        return self._session.post(url, data=data, **kwargs)
+    def post(self, url: str, data=None, **kwargs):
+        if data is not None and not isinstance(data, (str, bytes, bytearray)):
+            data = json.dumps(data)
+        return self.request('POST', url, data=data, **kwargs)
 
 
 class Bingo18:
@@ -70,8 +155,7 @@ class Bingo18:
         if self._render_info is not None:
             return self._render_info
 
-        page = self._http.get(URL, timeout=REQUEST_TIMEOUT)
-        page.raise_for_status()
+        self._http.get(URL, timeout=REQUEST_TIMEOUT)
         response = self._http.post(
             RENDER_INFO_URL,
             headers={
@@ -82,7 +166,6 @@ class Bingo18:
             data=json.dumps({'SiteId': 'main.frontend.vi'}),
             timeout=REQUEST_TIMEOUT,
         )
-        response.raise_for_status()
         payload = response.json().get('value')
         if not isinstance(payload, dict) or not payload.get('SiteId'):
             raise RuntimeError('Vietlott returned an invalid render context')
@@ -110,7 +193,6 @@ class Bingo18:
             }),
             timeout=REQUEST_TIMEOUT,
         )
-        response.raise_for_status()
         value = response.json().get('value')
         if not isinstance(value, dict) or value.get('Error'):
             message = value.get('InfoMessage') if isinstance(value, dict) else None

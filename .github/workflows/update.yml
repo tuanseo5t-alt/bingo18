@@ -22,7 +22,25 @@ jobs:
       - name: Install dependencies
         run: pip install --quiet --upgrade cloudscraper beautifulsoup4 lxml pydantic pandas pyarrow "curl_cffi>=0.15.0"
 
+      # Cloudflare hard-blocks the GitHub Actions IP range with HTTP 403.
+      # The fetcher rotates through multiple Chrome impersonate profiles
+      # and an optional proxy pool to bypass this. Configure BINGO18_PROXIES
+      # as a repository secret holding a semicolon-separated list of
+      # `http://user:pass@host:port` URLs (or leave it empty to use the
+      # direct runner IP, which usually fails on Actions).
+      - name: Forward proxy secret
+        env:
+          BINGO18_PROXIES: ${{ secrets.BINGO18_PROXIES }}
+        run: |
+          if [ -n "$BINGO18_PROXIES" ]; then
+            echo "BINGO18_PROXIES length: $(printf '%s' "$BINGO18_PROXIES" | wc -c) chars"
+          else
+            echo "BINGO18_PROXIES is empty; fetcher will try direct egress"
+          fi
+
       - name: Fetch latest draws
+        env:
+          BINGO18_PROXIES: ${{ secrets.BINGO18_PROXIES }}
         run: python src/fetch_bingo18.py --once
 
       - name: Commit changes
