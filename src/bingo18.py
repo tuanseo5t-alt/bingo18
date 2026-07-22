@@ -3,7 +3,9 @@ __github__ = 'https://github.com/khiemdoan'
 __email__ = 'doankhiem.crazy@gmail.com'
 
 from datetime import date, datetime
+import json
 from pathlib import Path
+import re
 
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -12,7 +14,12 @@ from cloudscraper import CloudScraper
 from dtos import Bingo18Result, Bingo18ResultList
 
 URL = 'https://vietlott.vn/vi/trung-thuong/ket-qua-trung-thuong/winning-number-bingo18'
+RENDER_INFO_URL = 'https://vietlott.vn/ajaxpro/Vietlott.Utility.WebEnvironments,Vietlott.Utility.ashx'
+DRAW_RESULT_URL = 'https://vietlott.vn/ajaxpro/Vietlott.PlugIn.WebParts.GameBingoCompareWebPart,Vietlott.PlugIn.WebParts.ashx'
 DATA_DIR = Path('data/bingo18')
+PAGE_SIZE = 6
+MAX_PAGES_PER_FETCH = 100
+REQUEST_TIMEOUT = 30
 
 
 class Bingo18:
@@ -20,6 +27,7 @@ class Bingo18:
         self._http = CloudScraper()
         self._data: dict[tuple[date, int], Bingo18Result] = {}
         self._raw_data: pd.DataFrame = pd.DataFrame()
+        self._render_info: dict | None = None
 
     def load(self) -> None:
         path = DATA_DIR / 'bingo18.json'
@@ -31,65 +39,127 @@ class Bingo18:
             self._data[(d.date, d.draw_id)] = d
         self.generate_dataframe()
 
+    def _get_render_info(self) -> dict:
+        if self._render_info is not None:
+            return self._render_info
+
+        page = self._http.get(URL, timeout=REQUEST_TIMEOUT)
+        page.raise_for_status()
+        response = self._http.post(
+            RENDER_INFO_URL,
+            headers={
+                'Content-Type': 'text/plain; charset=utf-8',
+                'X-AjaxPro-Method': 'ServerSideFrontEndCreateRenderInfo',
+                'Referer': URL,
+            },
+            data=json.dumps({'SiteId': 'main.frontend.vi'}),
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        payload = response.json().get('value')
+        if not isinstance(payload, dict) or not payload.get('SiteId'):
+            raise RuntimeError('Vietlott returned an invalid render context')
+        self._render_info = payload
+        return payload
+
+    def _fetch_page(self, page_index: int) -> BeautifulSoup:
+        response = self._http.post(
+            DRAW_RESULT_URL,
+            headers={
+                'Content-Type': 'text/plain; charset=utf-8',
+                'X-AjaxPro-Method': 'ServerSideDrawResult',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Origin': 'https://vietlott.vn',
+                'Referer': URL,
+            },
+            data=json.dumps({
+                'ORenderInfo': self._get_render_info(),
+                'GameId': '8',
+                'GameDrawNo': '',
+                'number': '',
+                'DrawDate': '',
+                'PageIndex': page_index,
+                'TotalRow': 0,
+            }),
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        value = response.json().get('value')
+        if not isinstance(value, dict) or value.get('Error'):
+            message = value.get('InfoMessage') if isinstance(value, dict) else None
+            raise RuntimeError(message or 'Vietlott rejected the Bingo18 Ajax request')
+        html = value.get('HtmlContent')
+        if not html:
+            raise RuntimeError('Vietlott returned no Bingo18 result HTML')
+        return BeautifulSoup(html, 'lxml')
+
+    @staticmethod
+    def _parse_row(row) -> Bingo18Result | None:
+        cells = row.find_all('td')
+        if len(cells) != 4:
+            return None
+        date_links = cells[0].find_all('a')
+        if len(date_links) < 2:
+            return None
+        try:
+            parsed_date = datetime.strptime(date_links[0].get_text(strip=True), '%d/%m/%Y').date()
+            draw_id = int(date_links[1].get_text(strip=True).lstrip('#'))
+        except ValueError:
+            return None
+
+        balls_div = cells[1].find('div', class_='CssDivBingo')
+        if balls_div is None:
+            return None
+        ball_spans = balls_div.select('span.bong_tron_bingo') or balls_div.find_all('span')
+        try:
+            balls = [int(span.get_text(strip=True)) for span in ball_spans if span.get_text(strip=True).isdigit()]
+        except ValueError:
+            return None
+        if len(balls) != 3:
+            return None
+
+        total_text = cells[2].get_text(' ', strip=True)
+        total_match = re.search(r'\d+', total_text)
+        if total_match is None:
+            return None
+        return Bingo18Result(
+            date=parsed_date,
+            draw_id=draw_id,
+            ball_1=balls[0],
+            ball_2=balls[1],
+            ball_3=balls[2],
+            total=int(total_match.group()),
+            verdict=cells[3].get_text(' ', strip=True),
+        )
+
     def fetch(self) -> list[Bingo18Result]:
-        """Fetch the most recent draws from Vietlott's Bingo18 results page.
+        """Fetch new Bingo18 draws, paging until existing data is reached.
 
-        Returns the list of newly fetched results (i.e. those whose
-        ``(date, draw_id)`` was not already in the cache). The 6 most
-        recent draws live on the first page of the listing.
+        Vietlott exposes six draws per Ajax page. Fetching continues past the
+        first page when the local cache is behind, which prevents a missed
+        polling cycle from permanently losing draws.
         """
-        resp = self._http.get(URL)
-        if resp.status_code != 200:
-            return []
-        soup = BeautifulSoup(resp.text, 'lxml')
-
-        output = soup.find('div', class_='doso_keno_output_nd')
-        if output is None:
-            return []
-        rows = output.select('table.table-hover > tbody > tr')
         fetched: list[Bingo18Result] = []
-        for row in rows:
-            cells = row.find_all('td')
-            if len(cells) != 4:
-                continue
-            date_links = cells[0].find_all('a')
-            if len(date_links) < 2:
-                continue
-            date_text = date_links[0].get_text(strip=True)
-            draw_id_text = date_links[1].get_text(strip=True).lstrip('#')
-            try:
-                parsed_date = datetime.strptime(date_text, '%d/%m/%Y').date()
-                draw_id = int(draw_id_text)
-            except ValueError:
-                continue
+        for page_index in range(MAX_PAGES_PER_FETCH):
+            soup = self._fetch_page(page_index)
+            rows = soup.select('table.table-hover > tbody > tr')
+            if not rows:
+                break
 
-            balls_div = cells[1].find('div', class_='CssDivBingo')
-            if balls_div is None:
-                continue
-            balls = [int(span.get_text(strip=True)) for span in balls_div.find_all('span', class_='bong_tron_bingo')]
-            if len(balls) != 3:
-                continue
+            page_contains_cached_draw = False
+            for row in rows:
+                result = self._parse_row(row)
+                if result is None:
+                    continue
+                key = (result.date, result.draw_id)
+                if key in self._data:
+                    page_contains_cached_draw = True
+                    continue
+                self._data[key] = result
+                fetched.append(result)
 
-            try:
-                total = int(cells[2].get_text(strip=True))
-            except ValueError:
-                continue
-            verdict = cells[3].get_text(strip=True)
-
-            result = Bingo18Result(
-                date=parsed_date,
-                draw_id=draw_id,
-                ball_1=balls[0],
-                ball_2=balls[1],
-                ball_3=balls[2],
-                total=total,
-                verdict=verdict,
-            )
-            key = (result.date, result.draw_id)
-            if key in self._data:
-                continue
-            self._data[key] = result
-            fetched.append(result)
+            if page_contains_cached_draw or len(rows) < PAGE_SIZE:
+                break
 
         self.generate_dataframe()
         return fetched
