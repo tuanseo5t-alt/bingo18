@@ -6,97 +6,63 @@ on:
       - data-update
   workflow_dispatch:
 
-# Vietlott's site blocks the shared GitHub Actions IP range, so this
-# repository cannot fetch live data from CI. Instead, data is fetched
-# on a machine whose egress IP is not blocked (e.g. the maintainer's
-# home connection) and pushed to the ``data-update`` branch. This
-# workflow mirrors those changes into ``main`` automatically so the
-# public copy of the data stays current.
+# GitHub Actions' shared IP range is blocked by Cloudflare on Vietlott's
+# site (HTTP 403), so live data cannot be fetched from CI. Instead this
+# workflow mirrors data from the ``data-update`` branch -- which is
+# pushed by maintainers running the fetcher on an unblocked egress IP
+# -- directly into ``main``.
 #
 # Workflow:
-#   1. Edit code or run ``python src/fetch_*.py --once`` locally.
-#   2. ``git checkout -b data-update`` (if needed) and commit data
-#      changes only (no source code).
-#   3. ``git push origin data-update``.
-#   4. This workflow opens/updates a PR from ``data-update`` to ``main``,
-#      or, if it is already up to date, just merges ``data-update`` into
-#      ``main`` and pushes the result.
+#   1. ``git fetch origin data-update``.
+#   2. If ``data-update`` has commits that ``main`` lacks, fast-forward
+#      ``main`` to include them (creating a merge commit if histories
+#      diverged) and push.
+#   3. If they are in sync, exit cleanly without producing noise.
 #
-# If you do not want a PR step, set ``AUTO_MERGE=true`` as a repository
-# variable (default false) and the workflow will fast-forward / create
-# a merge commit straight into main on every push to data-update.
+# The branch can stay around; pushing the same commits again is a no-op.
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   merge-data:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout main
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: main
 
-      - name: Ensure main is checked out
-        run: git checkout main
-
-      - name: Detect newer commits on data-update
-        id: detect
+      - name: Merge data-update into main
         run: |
-          git fetch origin data-update
-          DATA_SHA=$(git rev-parse origin/data-update)
-          MAIN_SHA=$(git rev-parse origin/main)
-          echo "data-update: $DATA_SHA"
-          echo "main       : $MAIN_SHA"
-          # Count commits on data-update that are not on main. If zero, there
-          # is nothing new to merge.
-          AHEAD=$(git rev-list --count origin/main..origin/data-update)
-          echo "ahead=$AHEAD" >> $GITHUB_OUTPUT
-          echo "data_sha=$DATA_SHA" >> $GITHUB_OUTPUT
-          echo "main_sha=$MAIN_SHA" >> $GITHUB_OUTPUT
-
-      - name: No new data
-        if: steps.detect.outputs.ahead == '0'
-        run: echo "data-update has no new commits beyond main; nothing to do."
-
-      - name: Open or update PR
-        if: steps.detect.outputs.ahead != '0' && env.AUTO_MERGE != 'true'
-        env:
-          AUTO_MERGE: ${{ vars.AUTO_MERGE }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # See if a PR from data-update -> main is already open.
-          EXISTING=$(gh pr list \
-            --base main \
-            --head data-update \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty')
-          if [ -n "$EXISTING" ]; then
-            echo "Reusing existing PR #$EXISTING"
-            # Re-point the PR branch at the latest data-update tip so the
-            # diff reflects new pushes.
-            gh pr edit "$EXISTING" --title "Data update: $(date -u +'%Y-%m-%d %H:%M UTC')"
-          else
-            echo "Opening a new PR for data-update -> main"
-            gh pr create \
-              --base main \
-              --head data-update \
-              --title "Data update: $(date -u +'%Y-%m-%d %H:%M UTC')" \
-              --body "Auto-generated from the \`data-update\` branch."
-          fi
-
-      - name: Auto-merge into main
-        if: steps.detect.outputs.ahead != '0' && env.AUTO_MERGE == 'true'
-        env:
-          AUTO_MERGE: ${{ vars.AUTO_MERGE }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Use a merge commit so the data-update history is preserved.
+          set -euo pipefail
           git config user.email "action@github.com"
           git config user.name "GitHub Action"
-          git merge --no-ff origin/data-update -m "Sync data from data-update"
+
+          git fetch origin data-update
+
+          DATA_SHA=$(git rev-parse origin/data-update)
+          MAIN_SHA=$(git rev-parse origin/main)
+
+          echo "data-update: $DATA_SHA"
+          echo "main       : $MAIN_SHA"
+
+          if git merge-base --is-ancestor "$DATA_SHA" "$MAIN_SHA"; then
+            echo "main already contains data-update; nothing to merge."
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor "$MAIN_SHA" "$DATA_SHA"; then
+            echo "main is an ancestor of data-update; fast-forwarding."
+            git merge --ff-only origin/data-update
+            git push origin main
+            exit 0
+          fi
+
+          echo "Histories diverged; creating merge commit."
+          git merge --no-ff origin/data-update \
+            -m "Sync data from data-update ($(date -u +'%Y-%m-%d %H:%M UTC'))"
           git push origin main
