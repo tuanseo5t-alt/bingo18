@@ -4,21 +4,14 @@ on:
   workflow_dispatch:
   schedule:
     # Bingo18 draws every ~6 minutes between 06:00 and 21:53 (UTC+7).
-    # Cron runs every 20 minutes: short enough to never miss more than a
-    # handful of draws, long enough that consecutive runs do not overlap
-    # and cancel each other (each run takes 1-10 min depending on proxy
-    # health). The fetcher back-fills any draws that arrived since the
-    # last successful run via Ajax-side pagination.
-    - cron: '*/20 * * * *'
+    # Polling at this cadence plus the fetcher's Ajax back-fill keeps
+    # every draw even when a run is delayed.
+    - cron: '*/7 * * * *'
 
 jobs:
   update-data:
-    # Free public proxies are slow (5-8s per request) and only ~12% pass
-    # Vietlott's IP reputation check, so a full probe + 5 retries can
-    # take 5-10 minutes. 10 minutes gives us headroom while still letting
-    # a fresh cron run start before the previous one finishes.
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 7
     steps:
       - uses: actions/checkout@v4
 
@@ -27,28 +20,9 @@ jobs:
           python-version: '3.14'
 
       - name: Install dependencies
-        run: pip install --quiet --upgrade cloudscraper beautifulsoup4 lxml pydantic pandas pyarrow "curl_cffi>=0.15.0"
-
-      # Cloudflare hard-blocks the GitHub Actions IP range with HTTP 403.
-      # The fetcher rotates through multiple Chrome impersonate profiles
-      # and an optional proxy pool to bypass this. By default it scrapes
-      # public free-proxy listings and probes them against Vietlott;
-      # optionally override BINGO18_PROXIES as a repository secret
-      # containing a semicolon-separated list of
-      # `http://user:pass@host:port` URLs to use paid/known-good proxies.
-      - name: Forward proxy secret
-        env:
-          BINGO18_PROXIES: ${{ secrets.BINGO18_PROXIES }}
-        run: |
-          if [ -n "$BINGO18_PROXIES" ]; then
-            echo "BINGO18_PROXIES configured: $(printf '%s' "$BINGO18_PROXIES" | tr ';' '\n' | wc -l) entry(s)"
-          else
-            echo "BINGO18_PROXIES not set; fetcher will rely on FreeProxyPool"
-          fi
+        run: pip install cloudscraper beautifulsoup4 lxml pydantic pandas pyarrow
 
       - name: Fetch latest draws
-        env:
-          BINGO18_PROXIES: ${{ secrets.BINGO18_PROXIES }}
         run: python src/fetch_bingo18.py --once
 
       - name: Commit changes
